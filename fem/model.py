@@ -1,122 +1,89 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Tuple
-import math
+from typing import Dict
+import os
 
 import numpy as np
 import pandas as pd
 
+from fem.utils import ModelError
 
-class Model(object):
+
+class BaseModel:
     def __init__(self):
-
+        """df_model 
+        csv_file Tri 2D model Example...
+        ---------------------------------------------------------------------------------------------------------------------------
+        |element_no|tri_node_1|tri_node_2|tri_node_3|tri_node_1_x|tri_node_1_y|tri_node_2_x|tri_node_2_y|tri_node_3_x|tri_node_3_y|
+        ---------------------------------------------------------------------------------------------------------------------------
+        |         0|         0|         1|          4|          0|           0|           1|           0|           1|           1|
+        |         1|         1|         2|          3|          1|           0|           2|           0|           2|           1|
+        |         2|         1|         3|          4|          1|           0|           2|           2|           1|           1|
+        |         3|         0|         4|          5|          0|           0|           1|           2|           0|           1|
+        ---------------------------------------------------------------------------------------------------------------------------
+        """
+        self._df_model = None
         self._elements = []
+        self._global_node_num = 0
+        self._element_num = 0
 
-        self._node_num = None
-        self._dof_node = 2
+        self._dof_node = None
         self._dof_total = None
-        self._node_tria = 3
+        self._node_tria = None
         self._dof_tria3 = None
-        self._elemnt_num = None
 
-        self._k_mat = None
+        self._stack_data = {}
 
-    def read_model(self, model_filename: str, young_module: float, poisson_retio: float):
-
-        df_model = pd.read_csv(model_filename)  # モデルデータ
-
-        d_mat = PlateStrainDMatrix(young_module=young_module, poisson_retio=poisson_retio)
-
-        for element_no in range(len(df_model)):
-            node_1 = Node(x=df_model['tri_node_1_x'][element_no],
-                          y=df_model['tri_node_1_y'][element_no],
-                          node_no=df_model['tri_node_1'][element_no])
-            node_2 = Node(x=df_model['tri_node_2_x'][element_no],
-                          y=df_model['tri_node_2_y'][element_no],
-                          node_no=df_model['tri_node_2'][element_no])
-            node_3 = Node(x=df_model['tri_node_3_x'][element_no],
-                          y=df_model['tri_node_3_y'][element_no],
-                          node_no=df_model['tri_node_3'][element_no])
-            
-            self._elements.append(
-                Tri2dElement(node_1=node_1, node_2=node_2, node_3=node_3, d_mat=d_mat)
-            )
-
-        self._node_num = max(df_model["tri_node_1"].max(), df_model["tri_node_2"].max(), df_model["tri_node_3"].max()) + 1
-        self._dof_total = self._node_num * self._dof_node
-        self._dof_tria3 = self._node_tria * self._dof_node
-        self._elemnt_num = max(df_model["element_no"])
-
-        self._k_mat = np.zeros((self._dof_total, self._dof_total))  # 全体剛性マトリクスK, 0で初期化
-
-        for element in self._elements:
-            for i, row in enumerate(element.ke_mat):
-                for j, col in enumerate(row):
-                        kmat_x = element.nodes[math.floor(i / 2) + 1]['node_no'] * 2 - (i + 1) % 2 + 1
-                        kmat_y = element.nodes[math.floor(j / 2) + 1]['node_no'] * 2 - (j + 1) % 2 + 1
-                        self._k_mat[kmat_x][kmat_y] += col
-
-    @property
-    def model_data(self):
-        return {
-            'node_num': self._node_num,
-            'dof_node': self._dof_node,
-            'dof_total': self._dof_total,
-            'node_tria': self._node_tria,
-            'dof_tria3': self._dof_tria3,
-            'element_num': self._elemnt_num
-        }
+    @abstractmethod
+    def read_model(self, csv_file_path) -> None:
+        pass
 
     @property
     def elements(self):
         return self._elements
-
-    @property
-    def k_mat(self):
-        return self._k_mat
-
-class DMatrix(ABC):
-    @property
-    def young_module(self) -> float:
-        return self._young_module
-
-    @property
-    def poisson_retio(self) -> float:
-        return self._poisson_retio
-
-    @property
-    def thickness(self) -> float:
-        return self._thickness
     
     @property
-    def d_mat(self) -> np.array:
-        return self._d_mat
+    def dof_total(self):
+        return self._dof_total
+
+    def stack_data(self, key) -> None:
+        return self._stack_data[str(key)]
+
+    def append_stack_data(self, key, data) -> None:
+        self._stack_data[str(key)] = data
 
 
-class PlateStrainDMatrix(DMatrix):
-    # 平面歪み仮定のDマトリクス
-    def __init__(self, young_module: float, poisson_retio: float):
-        self._young_module = young_module
-        self._poisson_retio = poisson_retio
-        self._thickness = 1
+class ModelTri2d(BaseModel):
+    
+    def read_model(self, csv_file_path) -> None:
+        if not os.path.exists(csv_file_path):
+            raise ModelError('csv file is not exists')
 
-        d_coef = self._young_module / ((1 - 2 * self._poisson_retio) * (1 + self._poisson_retio))
+        self._df_model = pd.read_csv(csv_file_path)
 
-        self._d_mat = d_coef * np.array([
-            [1 - self._poisson_retio, self._poisson_retio, 0],    
-            [self._poisson_retio, 1 - self._poisson_retio, 0],    
-            [0, 0, (1 - 2 * self._poisson_retio) / 2]
-        ])
+        self._global_node_num = max(max(self._df_model['tri_node_1']),
+                                    max(self._df_model['tri_node_2']),
+                                    max(self._df_model['tri_node_3'])) + 1
+        self._element_num = len(self._df_model['element_no'])
 
-    @property
-    def d_mat(self):
-        return self._d_mat
+        self._dof_node = 2
+        self._node_tria = 3
+        self._dof_tria3 = self._node_tria * self._dof_node
+        self._dof_total = self._global_node_num * self._dof_node
+
+        for row in self._df_model.itertuples():
+            node_1 = Node2d(x=row.tri_node_1_x, y=row.tri_node_1_y, grobal_node_no=row.tri_node_1)
+            node_2 = Node2d(x=row.tri_node_2_x, y=row.tri_node_2_y, grobal_node_no=row.tri_node_2)
+            node_3 = Node2d(x=row.tri_node_3_x, y=row.tri_node_3_y, grobal_node_no=row.tri_node_3)
+            
+            element = ElementTri2d(node_1=node_1, node_2=node_2, node_3=node_3, element_no=row.element_no)
+            self._elements.append(element)
 
 
-class Node(object):
-    def __init__(self, x: float, y: float, node_no: int):
+class Node2d:
+    def __init__(self, x: float, y: float, grobal_node_no: int):
         self._x = x
         self._y = y
-        self._node_no = node_no
+        self._grobal_node_no = grobal_node_no
 
     @property
     def x(self) -> float:
@@ -127,24 +94,20 @@ class Node(object):
         return self._y
 
     @property
-    def node_no(self):
-        return self._node_no
+    def grobal_node_no(self) -> int:
+        return self._grobal_node_no
 
 
-class Element(ABC):
-    pass
-
-
-class Tri2dElement(Element):
-    def __init__(self, node_1: Node, node_2: Node, node_3: Node, d_mat: DMatrix):
+class ElementTri2d:
+    def __init__(self, node_1: Node2d, node_2: Node2d, node_3: Node2d, element_no: int):
         self._node_1 = node_1
         self._node_2 = node_2
         self._node_3 = node_3
-        self._d_mat = d_mat.d_mat
+        self._element_no = element_no
+        self._stack_data = {}
 
         self._area = (
-            node_1.x * node_1.y - node_1.x * node_3.y + node_2.x * node_3.y\
-            - node_2.x * node_1.y + node_3.x * node_1.y - node_3.x * node_2.y) / 2
+            node_1.x * node_2.y - node_1.x * node_3.y + node_2.x * node_3.y - node_2.x * node_1.y + node_3.x * node_1.y - node_3.x * node_2.y) / 2
 
         coef = 1 / (2 * self._area)
 
@@ -154,26 +117,37 @@ class Tri2dElement(Element):
             [coef * (node_3.x - node_2.x), coef * (node_2.y - node_3.y), coef * (node_1.x - node_3.x), coef * (node_3.y - node_1.y), coef * (node_2.x - node_1.x), coef * (node_1.y - node_2.y)]
         ])
 
-        self._ke_mat = d_mat.thickness * self._area * self._b_mat.T @ d_mat.d_mat.T @ self._b_mat
+    @property
+    def b_mat(self):
+        return self._b_mat
+
+    @property
+    def area(self):
+        return self._area
 
     @property
     def nodes(self) -> Dict:
         return {
             1: {
-                'node_no': self._node_1.node_no,
+                'node_no': self._node_1.grobal_node_no,
                 'coordinate': (self._node_1.x, self._node_1.y)},
             2: {
-                'node_no': self._node_2.node_no,
+                'node_no': self._node_2.grobal_node_no,
                 'coordinate': (self._node_2.x, self._node_2.y)},
             3: {
-                'node_no': self._node_3.node_no,
+                'node_no': self._node_3.grobal_node_no,
                 'coordinate': (self._node_3.x, self._node_3.y)},
         }
 
-    @property
-    def b_mat(self) -> np.array:
-        return self._b_mat
+    def stack_data(self, key) -> None:
+        return self._stack_data[str(key)]
 
-    @property
-    def ke_mat(self) -> np.array:
-        return self._ke_mat
+    def append_stack_data(self, key, data) -> None:
+        self._stack_data[str(key)] = data
+
+
+
+if __name__ == '__main__':
+    model_obj = Model()
+    model_obj.read_model(model_filename="test_model.csv", young_module=210000, poisson_retio=0.3)
+    print("=====END=====")
