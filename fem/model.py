@@ -1,11 +1,15 @@
 from abc import ABC, abstractmethod
-from typing import Dict
+from typing import Any, Dict
 import os
+import typing
 
-import numpy as np
 import pandas as pd
 
-from fem.utils import ModelError
+from fem.boundary_condition import ForceCondition2d
+from fem.boundary_condition import HoldCondition
+from fem.solver_module.construction_module import PlateStrainDMatrix
+from fem.model_factor.element import ElementTri2d
+from fem.model_factor.node import Node2d
 
 
 class BaseModel:
@@ -21,133 +25,71 @@ class BaseModel:
         |         3|         0|         4|          5|          0|           0|           1|           2|           0|           1|
         ---------------------------------------------------------------------------------------------------------------------------
         """
-        self._df_model = None
-        self._elements = []
+        self.df_model = None
+        self.elements = []
+        self.dof_total = None
+
         self._global_node_num = 0
         self._element_num = 0
-
         self._dof_node = None
-        self._dof_total = None
         self._node_tria = None
         self._dof_tria3 = None
 
-        self._stack_data = {}
+        self.k_mat = None
+        self.kc_mat = None
+        self.force_vector = None
+        self.u_vector = None
+        self.u_hold_vec = None
+
+        self.result_u_vec = None
 
     @abstractmethod
-    def read_model(self, csv_file_path) -> None:
-        pass
+    def read_model(self, csv_file_path):
+        raise NotImplementedError()
 
-    @property
-    def elements(self):
-        return self._elements
-    
-    @property
-    def dof_total(self):
-        return self._dof_total
-
-    def stack_data(self, key) -> None:
-        return self._stack_data[str(key)]
-
-    def append_stack_data(self, key, data) -> None:
-        self._stack_data[str(key)] = data
+    @abstractmethod
+    def set_boundary_condition(self, force_condition, hold_condition):
+        raise NotImplementedError()
 
 
 class ModelTri2d(BaseModel):
-    
     def read_model(self, csv_file_path) -> None:
         if not os.path.exists(csv_file_path):
-            raise ModelError('csv file is not exists')
+            raise TypeError()
 
-        self._df_model = pd.read_csv(csv_file_path)
+        self.df_model = pd.read_csv(csv_file_path)
 
-        self._global_node_num = max(max(self._df_model['tri_node_1']),
-                                    max(self._df_model['tri_node_2']),
-                                    max(self._df_model['tri_node_3'])) + 1
-        self._element_num = len(self._df_model['element_no'])
+        self._global_node_num = max(max(self.df_model['tri_node_1']),
+                                    max(self.df_model['tri_node_2']),
+                                    max(self.df_model['tri_node_3'])) + 1
+        self._element_num = len(self.df_model['element_no'])
 
         self._dof_node = 2
         self._node_tria = 3
         self._dof_tria3 = self._node_tria * self._dof_node
-        self._dof_total = self._global_node_num * self._dof_node
+        self.dof_total = self._global_node_num * self._dof_node
 
-        for row in self._df_model.itertuples():
-            node_1 = Node2d(x=row.tri_node_1_x, y=row.tri_node_1_y, grobal_node_no=row.tri_node_1)
-            node_2 = Node2d(x=row.tri_node_2_x, y=row.tri_node_2_y, grobal_node_no=row.tri_node_2)
-            node_3 = Node2d(x=row.tri_node_3_x, y=row.tri_node_3_y, grobal_node_no=row.tri_node_3)
+        for row in self.df_model.itertuples():
+            node_0 = Node2d(x=row.tri_node_1_x, y=row.tri_node_1_y, global_node_no=row.tri_node_1)
+            node_1 = Node2d(x=row.tri_node_2_x, y=row.tri_node_2_y, global_node_no=row.tri_node_2)
+            node_2 = Node2d(x=row.tri_node_3_x, y=row.tri_node_3_y, global_node_no=row.tri_node_3)
             
-            element = ElementTri2d(node_1=node_1, node_2=node_2, node_3=node_3, element_no=row.element_no)
-            self._elements.append(element)
+            element = ElementTri2d(node_0=node_0, node_1=node_1, node_2=node_2, element_no=row.element_no)
+            self.elements.append(element)
+    
+    def set_boundary_condition(self, d_mat: PlateStrainDMatrix, force_condition: ForceCondition2d, hold_condition: HoldCondition):
+        # Dマトリクスの登録
+        for element in self.elements:
+            element.d_mat = d_mat
 
+        # 強制荷重の登録
+        for element in self.elements:
+            for node in element.nodes:
+                if node.global_node_no in force_condition.force_condition:
+                    node.all_coodinate_force(forces=force_condition.force_condition[node.global_node_no])
 
-class Node2d:
-    def __init__(self, x: float, y: float, grobal_node_no: int):
-        self._x = x
-        self._y = y
-        self._grobal_node_no = grobal_node_no
-
-    @property
-    def x(self) -> float:
-        return self._x
-
-    @property
-    def y(self) -> float:
-        return self._y
-
-    @property
-    def grobal_node_no(self) -> int:
-        return self._grobal_node_no
-
-
-class ElementTri2d:
-    def __init__(self, node_1: Node2d, node_2: Node2d, node_3: Node2d, element_no: int):
-        self._node_1 = node_1
-        self._node_2 = node_2
-        self._node_3 = node_3
-        self._element_no = element_no
-        self._stack_data = {}
-
-        self._area = (
-            node_1.x * node_2.y - node_1.x * node_3.y + node_2.x * node_3.y - node_2.x * node_1.y + node_3.x * node_1.y - node_3.x * node_2.y) / 2
-
-        coef = 1 / (2 * self._area)
-
-        self._b_mat = np.array([
-            [coef * (node_2.y - node_3.y), 0, coef * (node_3.y - node_1.y), 0, coef * (node_1.y - node_2.y), 0],
-            [0, coef * (node_3.x - node_2.x), 0, coef * (node_1.x - node_3.x), 0, coef * (node_2.x - node_1.x)],
-            [coef * (node_3.x - node_2.x), coef * (node_2.y - node_3.y), coef * (node_1.x - node_3.x), coef * (node_3.y - node_1.y), coef * (node_2.x - node_1.x), coef * (node_1.y - node_2.y)]
-        ])
-
-    @property
-    def b_mat(self):
-        return self._b_mat
-
-    @property
-    def area(self):
-        return self._area
-
-    @property
-    def nodes(self) -> Dict:
-        return {
-            1: {
-                'node_no': self._node_1.grobal_node_no,
-                'coordinate': (self._node_1.x, self._node_1.y)},
-            2: {
-                'node_no': self._node_2.grobal_node_no,
-                'coordinate': (self._node_2.x, self._node_2.y)},
-            3: {
-                'node_no': self._node_3.grobal_node_no,
-                'coordinate': (self._node_3.x, self._node_3.y)},
-        }
-
-    def stack_data(self, key) -> None:
-        return self._stack_data[str(key)]
-
-    def append_stack_data(self, key, data) -> None:
-        self._stack_data[str(key)] = data
-
-
-
-if __name__ == '__main__':
-    model_obj = Model()
-    model_obj.read_model(model_filename="test_model.csv", young_module=210000, poisson_retio=0.3)
-    print("=====END=====")
+        # 拘束条件の登録
+        for element in self.elements:
+            for node in element.nodes:
+                if node.global_node_no in hold_condition.hold_condition:
+                    node.all_coodinate_hold(is_hold=hold_condition.hold_condition[node.global_node_no])
