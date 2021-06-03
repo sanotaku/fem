@@ -31,6 +31,8 @@ class Node2d(BaseNode):
         self.y_hold = False
         self.x_force = 0
         self.y_force = 0
+        self.x_u = None
+        self.y_u = None
 
     @property
     def coordinate(self):
@@ -60,7 +62,7 @@ class Node3d(BaseNode):
 
     @property
     def coordinate(self):
-        return np.array([self._x, self._y, self._z])
+        return np.array([self.x, self.y, self.z])
 
     def all_coodinate_hold(self, is_hold):
         self.x_hold = is_hold

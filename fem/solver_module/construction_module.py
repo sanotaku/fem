@@ -2,49 +2,32 @@ from abc import ABC
 
 import numpy as np
 
-from fem.utils import convert_total_vec_number
 from fem.utils import create_k_mat_idx
+from fem.utils import invert_global_and_coodinate
 
 
 class DMatrix(ABC):
     def __init__(self, young_module: float, poisson_retio: float):
-        self._young_module = young_module
-        self._poisson_retio = poisson_retio
-
-    @property
-    def young_module(self) -> float:
-        return self._young_module
-
-    @property
-    def poisson_retio(self) -> float:
-        return self._poisson_retio
-    
-    @property
-    def d_mat(self) -> np.array:
-        return self._d_mat
+        self.young_module = young_module
+        self.poisson_retio = poisson_retio
 
 
 class PlateStrainDMatrix(DMatrix):
     # 平面歪み仮定のDマトリクス
     def __init__(self, young_module: float, poisson_retio: float, thickness=1):
         super().__init__(young_module=young_module, poisson_retio=poisson_retio)
-        self._thickness = thickness
+        self.thickness = thickness
 
-        d_coef = self._young_module / ((1 - 2 * self._poisson_retio) * (1 + self._poisson_retio))
+        d_coef = self.young_module / ((1 - 2 * self.poisson_retio) * (1 + self.poisson_retio))
 
-        self._d_mat = d_coef * np.array([
-            [1 - self._poisson_retio, self._poisson_retio, 0],    
-            [self._poisson_retio, 1 - self._poisson_retio, 0],    
-            [0, 0, (1 - 2 * self._poisson_retio) / 2]
+        self.d_mat = d_coef * np.array([
+            [1 - self.poisson_retio, self.poisson_retio, 0],    
+            [self.poisson_retio, 1 - self.poisson_retio, 0],    
+            [0, 0, (1 - 2 * self.poisson_retio) / 2]
         ])
-
-    @property
-    def thickness(self) -> float:
-        return self._thickness
 
 
 def solve_2d_static(model_obj):
-
     # ======================
     # 部分剛性マトリクスを生成 =
     # ======================
@@ -64,28 +47,11 @@ def solve_2d_static(model_obj):
     model_obj.k_mat = k_mat
 
 
-    # ======================
-    # 境界条件を設定   　  　 =
-    # ======================
-    model_obj.force_vector = np.zeros(model_obj.dof_total)
-    model_obj.u_vector = np.zeros(model_obj.dof_total)
-    model_obj.u_hold_vec = np.full(model_obj.dof_total, fill_value=False)
-
-    for element in model_obj.elements:
-        for node in element.nodes:
-            model_obj.u_hold_vec[convert_total_vec_number(global_node_no=node.global_node_no, axis_num=0)] = node.x_hold
-            model_obj.u_hold_vec[convert_total_vec_number(global_node_no=node.global_node_no, axis_num=1)] = node.y_hold
-            
-    for element in model_obj.elements:
-        for node in element.nodes:
-            model_obj.force_vector[convert_total_vec_number(global_node_no=node.global_node_no, axis_num=0)] = node.x_force
-            model_obj.force_vector[convert_total_vec_number(global_node_no=node.global_node_no, axis_num=1)] = node.y_force
-
-
     # =============================
     # 境界条件を元に拡大係数行列を修正 =
     # =============================
-    model_obj.kc_mat = k_mat.copy()
+    model_obj.kc_mat = model_obj.k_mat.copy()
+    model_obj.u_vector = np.zeros(model_obj.dof_total)
 
     for i, hold in enumerate(model_obj.u_hold_vec):
         if hold:
@@ -102,3 +68,32 @@ def solve_2d_static(model_obj):
     # 連立方程式を解く =
     # ===============
     model_obj.result_u_vec = np.linalg.solve(model_obj.kc_mat, model_obj.force_vector)
+
+
+    # ===============
+    # 解を各節点に登録 =
+    # ===============
+    for element in model_obj.elements:
+        for node in element.nodes:
+
+            for total_vec_num in range(len(model_obj.result_u_vec)):
+                global_node_no, axis_num = invert_global_and_coodinate(total_vec_num)
+                if global_node_no == node.global_node_no:
+                    if axis_num == 0:
+                        node.x_u = model_obj.result_u_vec[total_vec_num]
+                    if axis_num == 1:
+                        node.y_u = model_obj.result_u_vec[total_vec_num]
+
+
+    # ===============
+    # 歪みの計算      =
+    # ===============
+    for element in model_obj.elements:
+        element.strain_vector = element.b_mat @ element.u
+
+
+    # ===============
+    # 応力の計算      =
+    # ===============
+    for element in model_obj.elements:
+        element.stress_vector = element.d_mat.d_mat @ element.strain_vector

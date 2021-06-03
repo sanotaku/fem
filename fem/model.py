@@ -1,8 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict
 import os
-import typing
 
+import numpy as np
 import pandas as pd
 
 from fem.boundary_condition import ForceCondition2d
@@ -10,9 +9,10 @@ from fem.boundary_condition import HoldCondition
 from fem.solver_module.construction_module import PlateStrainDMatrix
 from fem.model_factor.element import ElementTri2d
 from fem.model_factor.node import Node2d
+from fem.utils import convert_total_vec_number
 
 
-class BaseModel:
+class BaseModel(ABC):
     def __init__(self):
         """df_model 
         csv_file Tri 2D model Example...
@@ -78,6 +78,9 @@ class ModelTri2d(BaseModel):
             self.elements.append(element)
     
     def set_boundary_condition(self, d_mat: PlateStrainDMatrix, force_condition: ForceCondition2d, hold_condition: HoldCondition):
+        if self.df_model is None:
+            raise ValueError('df_model is None')
+
         # Dマトリクスの登録
         for element in self.elements:
             element.d_mat = d_mat
@@ -93,3 +96,19 @@ class ModelTri2d(BaseModel):
             for node in element.nodes:
                 if node.global_node_no in hold_condition.hold_condition:
                     node.all_coodinate_hold(is_hold=hold_condition.hold_condition[node.global_node_no])
+
+        # ======================
+        # 境界条件を設定   　  　 =
+        # ======================
+        self.force_vector = np.zeros(self.dof_total)
+        self.u_hold_vec = np.full(self.dof_total, fill_value=False)
+
+        for element in self.elements:
+            for node in element.nodes:
+                self.u_hold_vec[convert_total_vec_number(global_node_no=node.global_node_no, axis_num=0)] = node.x_hold
+                self.u_hold_vec[convert_total_vec_number(global_node_no=node.global_node_no, axis_num=1)] = node.y_hold
+
+        for element in self.elements:
+            for node in element.nodes:
+                self.force_vector[convert_total_vec_number(global_node_no=node.global_node_no, axis_num=0)] = node.x_force
+                self.force_vector[convert_total_vec_number(global_node_no=node.global_node_no, axis_num=1)] = node.y_force
